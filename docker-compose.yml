@@ -1,0 +1,25 @@
+version: '3.9'
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: filaviva-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: filaviva
+      POSTGRES_PASSWORD: filaviva
+      POSTGRES_DB: filaviva
+    ports:
+      - '5432:5432'
+    volumes:
+      - filaviva-postgres-data:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+    container_name: filaviva-redis
+    restart: unless-stopped
+    ports:
+      - '6379:6379'
+
+volumes:
+  filaviva-postgres-data:
