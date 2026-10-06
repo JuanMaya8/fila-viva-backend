@@ -16,18 +16,30 @@ import { PredictionModule } from './modules/prediction/prediction.module';
     }),
     TypeOrmModule.forRootAsync({
       inject: [ConfigService],
-      useFactory: (config: ConfigService) => ({
-        type: 'postgres',
-        host: config.get<string>('database.host'),
-        port: config.get<number>('database.port'),
-        username: config.get<string>('database.username'),
-        password: config.get<string>('database.password'),
-        database: config.get<string>('database.name'),
-        autoLoadEntities: true,
-        // synchronize is convenient for the first weeks of the project;
-        // replace it with TypeORM migrations before going to production.
-        synchronize: config.get<string>('nodeEnv') !== 'production',
-      }),
+      useFactory: (config: ConfigService) => {
+        const databaseUrl = config.get<string>('database.url');
+
+        return {
+          type: 'postgres',
+          ...(databaseUrl
+            ? {
+                url: databaseUrl,
+                ssl: { rejectUnauthorized: true },
+              }
+            : {
+                host: config.get<string>('database.host'),
+                port: config.get<number>('database.port'),
+                username: config.get<string>('database.username'),
+                password: config.get<string>('database.password'),
+                database: config.get<string>('database.name'),
+              }),
+          autoLoadEntities: true,
+          // Use DB_SYNCHRONIZE only for the demo bootstrap; production needs migrations.
+          synchronize:
+            config.get<boolean>('database.synchronize') ??
+            config.get<string>('nodeEnv') !== 'production',
+        };
+      },
     }),
     AgentsModule,
     ServiceTypesModule,

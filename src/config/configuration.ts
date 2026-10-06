@@ -2,6 +2,11 @@ export default () => ({
   nodeEnv: process.env.NODE_ENV || 'development',
   port: process.env.PORT ? parseInt(process.env.PORT, 10) : 3000,
   database: {
+    url: process.env.DATABASE_URL || undefined,
+    synchronize:
+      process.env.DB_SYNCHRONIZE === undefined
+        ? undefined
+        : process.env.DB_SYNCHRONIZE.toLowerCase() === 'true',
     host: process.env.DB_HOST || 'localhost',
     port: process.env.DB_PORT ? parseInt(process.env.DB_PORT, 10) : 5432,
     username: process.env.DB_USERNAME || 'filaviva',
