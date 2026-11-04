@@ -40,6 +40,11 @@ interface PendingWork {
  * in batch mode (/predict/queue), stores the snapshot in Redis and pushes
  * fresh views only to the affected Socket.io rooms.
  *
+ * Fan-out: one event produces one snapshot that is fanned out to many
+ * rooms (every waiting turn, each queue, the display, admins, advisors).
+ * With the Redis adapter each emit is also fanned out to every backend
+ * instance through Redis pub/sub.
+ *
  * Bursts are coalesced: while a recalculation runs, further events for the
  * same institution are merged into a single follow-up run.
  */
@@ -251,8 +256,10 @@ export class QueueOrchestrator
       this.gateway.emitTo(
         adminRoom,
         ServerEvents.DASHBOARD_UPDATE,
-        await this.views.dashboardView(state, snapshot, (id) =>
-          this.gateway.isAdvisorConnected(id),
+        await this.views.dashboardView(
+          state,
+          snapshot,
+          await this.gateway.connectedAdvisors(state.advisors.map((a) => a.id)),
         ),
       );
     }

@@ -155,7 +155,7 @@ export class QueueViewsService {
   async dashboardView(
     state: QueueState,
     snapshot: QueueSnapshot,
-    isConnected: (agentId: string) => boolean,
+    connected: Set<string>,
   ): Promise<DashboardView> {
     const institutionId = state.institution.id;
     const [allAgents, accuracy, averageActualWaitMinutesToday, recent] =
@@ -180,7 +180,7 @@ export class QueueViewsService {
       windowNumber: agent.windowNumber,
       status: agent.status,
       active: agent.active,
-      connected: isConnected(agent.id),
+      connected: connected.has(agent.id),
       serviceTypeIds: agent.serviceTypes.map((t) => t.id),
       currentTicketCode: ticketByAgent.get(agent.id) ?? null,
     }));

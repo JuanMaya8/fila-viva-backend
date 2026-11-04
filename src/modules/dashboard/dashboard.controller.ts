@@ -39,9 +39,10 @@ export class DashboardController {
     if (!state || !snapshot) {
       throw new NotFoundException('Institution not found');
     }
-    return this.views.dashboardView(state, snapshot, (id) =>
-      this.gateway.isAdvisorConnected(id),
+    const connected = await this.gateway.connectedAdvisors(
+      state.advisors.map((a) => a.id),
     );
+    return this.views.dashboardView(state, snapshot, connected);
   }
 
   @Get('model')
