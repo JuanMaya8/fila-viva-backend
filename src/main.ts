@@ -1,12 +1,29 @@
+import 'dotenv/config';
+import { Logger, ValidationPipe } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { NestFactory } from '@nestjs/core';
-import { ValidationPipe } from '@nestjs/common';
-import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
+import { NestExpressApplication } from '@nestjs/platform-express';
+import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
+import helmet from 'helmet';
 import { AppModule } from './app.module';
+import { RealtimeIoAdapter } from './modules/realtime/realtime-io.adapter';
 
-async function bootstrap(): Promise<void> {
-  const app = await NestFactory.create(AppModule);
+const REQUIRED_ENV = ['JWT_SECRET', 'INTERNAL_API_KEY'];
 
-  app.enableCors();
+export function configureApp(app: NestExpressApplication): void {
+  const config = app.get(ConfigService);
+  const origins = config.get<string[]>('frontendUrls')!;
+
+  app.set('trust proxy', config.get<number>('trustProxy'));
+  app.use(
+    helmet({
+      // Swagger UI ships inline scripts; the API itself only serves JSON.
+      contentSecurityPolicy: false,
+      crossOriginResourcePolicy: { policy: 'same-site' },
+    }),
+  );
+  app.enableCors({ origin: origins, credentials: true });
+  app.useWebSocketAdapter(new RealtimeIoAdapter(app, origins));
   app.useGlobalPipes(
     new ValidationPipe({
       whitelist: true,
@@ -14,24 +31,39 @@ async function bootstrap(): Promise<void> {
       forbidNonWhitelisted: true,
     }),
   );
-
-  const config = new DocumentBuilder()
-    .setTitle('Fila Viva - Backend API')
-    .setDescription(
-      'Core API for turns, agents, service types and real-time queue state. ' +
-        'See README.md for the full system architecture.',
-    )
-    .setVersion('0.1.0')
-    .build();
-  const document = SwaggerModule.createDocument(app, config);
-  SwaggerModule.setup('docs', app, document);
-
-  const port = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
-  await app.listen(port);
-  // eslint-disable-next-line no-console
-  console.log(`Fila Viva backend running on port ${port}`);
-  // eslint-disable-next-line no-console
-  console.log(`Swagger docs available at http://localhost:${port}/docs`);
+  app.enableShutdownHooks();
 }
 
-bootstrap();
+async function bootstrap(): Promise<void> {
+  const logger = new Logger('Bootstrap');
+  const missing = REQUIRED_ENV.filter((name) => !process.env[name]);
+  if (missing.length > 0) {
+    logger.error(
+      `Missing required environment variables: ${missing.join(', ')}`,
+    );
+    process.exit(1);
+  }
+
+  const app = await NestFactory.create<NestExpressApplication>(AppModule);
+  configureApp(app);
+
+  const swagger = new DocumentBuilder()
+    .setTitle('Fila Viva - Backend API')
+    .setDescription(
+      'Core API for turns, advisors, service types and real-time queue state. ' +
+        'Log in with POST /auth/login and paste accessToken in "Authorize".',
+    )
+    .setVersion('1.0.0')
+    .addBearerAuth()
+    .addCookieAuth('fv_token')
+    .build();
+  SwaggerModule.setup('docs', app, SwaggerModule.createDocument(app, swagger));
+
+  const port = app.get(ConfigService).get<number>('port')!;
+  await app.listen(port);
+  logger.log(`Fila Viva backend listening on port ${port} (docs at /docs)`);
+}
+
+if (require.main === module) {
+  void bootstrap();
+}
