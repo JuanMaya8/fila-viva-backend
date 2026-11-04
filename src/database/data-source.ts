@@ -25,11 +25,14 @@ export function buildDataSourceOptions(): DataSourceOptions {
         database: database.name,
       };
 
+  // ts-node (CLI, seed, tests) loads .ts sources; the compiled app loads .js.
+  const ext = __filename.endsWith('.ts') ? 'ts' : 'js';
+
   return {
     type: 'postgres',
     ...connection,
-    entities: [join(__dirname, '..', '**', '*.entity.{ts,js}')],
-    migrations: [join(__dirname, 'migrations', '*.{ts,js}')],
+    entities: [join(__dirname, '..', '**', `*.entity.${ext}`)],
+    migrations: [join(__dirname, 'migrations', `*.${ext}`)],
     migrationsTableName: 'typeorm_migrations',
     synchronize: false,
     extra: { max: database.poolSize },

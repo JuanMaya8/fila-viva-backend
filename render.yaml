@@ -4,14 +4,31 @@ services:
     runtime: node
     plan: free
     buildCommand: npm install --include=dev && npm run build && npm prune --omit=dev
-    startCommand: npm run start:prod
+    # Runs pending migrations and the idempotent seed, then starts the API.
+    startCommand: npm run seed:prod && npm run start:prod
     healthCheckPath: /health
     envVars:
       - key: NODE_ENV
         value: production
       - key: DATABASE_URL
         sync: false
-      - key: DB_SYNCHRONIZE
-        value: "true"
+      - key: JWT_SECRET
+        generateValue: true
+      - key: INTERNAL_API_KEY
+        sync: false
+      - key: ADMIN_EMAIL
+        sync: false
+      - key: ADMIN_PASSWORD
+        sync: false
+      - key: FRONTEND_URL
+        sync: false
       - key: PREDICTION_SERVICE_URL
         value: https://fila-viva-ai.onrender.com
+      # The free AI instance may be waking up; the fallback covers timeouts.
+      - key: PREDICTION_TIMEOUT_MS
+        value: "8000"
+      - key: PREDICTION_TRANSPORT
+        value: http
+      # Optional: a Redis/Key Value URL enables snapshots and multi-instance sockets.
+      - key: REDIS_URL
+        sync: false
