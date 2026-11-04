@@ -1,0 +1,79 @@
+// gRPC contract between fila-viva-backend and fila-viva-ai.
+// This file is kept byte-for-byte identical in both repositories (proto/).
+// Field names are snake_case here; their JSON names (camelCase) match the
+// REST contract of POST /predict/queue exactly.
+syntax = "proto3";
+
+package filaviva.prediction.v1;
+
+service PredictionService {
+  // Same semantics as POST /predict/queue: one call per queue event.
+  rpc PredictQueue (QueuePredictionRequest) returns (QueuePredictionResponse);
+}
+
+message QueueServiceType {
+  string id = 1;
+  double avg_service_minutes = 2;
+  int32 steps_total = 3;
+}
+
+message QueueCurrentTurn {
+  string turn_id = 1;
+  string service_type_id = 2;
+  string status = 3;            // "called" | "in_service"
+  int32 elapsed_seconds = 4;
+  int32 steps_completed = 5;
+  int32 steps_total = 6;
+  bool is_complex = 7;
+}
+
+message QueueAdvisor {
+  string id = 1;
+  string status = 2;            // "available" | "busy" | "on_break"
+  repeated string service_type_ids = 3;
+  double speed_factor = 4;
+  int32 status_since_seconds = 5;
+  QueueCurrentTurn current_turn = 6;
+}
+
+message QueueWaitingTurn {
+  string turn_id = 1;
+  string service_type_id = 2;
+  bool preferential = 3;
+  string created_at = 4;        // ISO 8601
+}
+
+message QueuePredictionRequest {
+  string timestamp = 1;         // ISO 8601
+  int32 utc_offset_minutes = 2;
+  repeated QueueServiceType service_types = 3;
+  repeated QueueAdvisor advisors = 4;
+  repeated QueueWaitingTurn waiting_turns = 5;
+}
+
+message TurnPrediction {
+  string turn_id = 1;
+  int32 people_ahead = 2;
+  double estimated_wait_minutes = 3;
+  double lower_minutes = 4;
+  double upper_minutes = 5;
+  int32 confidence = 6;
+  double traditional_estimate_minutes = 7;
+  string congestion_level = 8;  // "low" | "medium" | "high"
+}
+
+message InServicePrediction {
+  string turn_id = 1;
+  double remaining_minutes = 2;
+  double lower_minutes = 3;
+  double upper_minutes = 4;
+  double expected_total_minutes = 5;
+}
+
+message QueuePredictionResponse {
+  string source = 1;            // "model" | "baseline"
+  string model_version = 2;
+  string congestion_level = 3;
+  repeated TurnPrediction turns = 4;
+  repeated InServicePrediction in_service = 5;
+}
