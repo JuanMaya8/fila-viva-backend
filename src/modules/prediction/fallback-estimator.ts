@@ -1,3 +1,4 @@
+import { round1 } from '../../common/utils/time';
 import {
   CongestionLevel,
   PROBE_TURN_PREFIX,
@@ -32,8 +33,6 @@ export function compareCallOrder(
   }
   return a.turnId < b.turnId ? -1 : a.turnId > b.turnId ? 1 : 0;
 }
-
-const round1 = (value: number) => Math.round(value * 10) / 10;
 
 /**
  * Backend-side estimate used only when fila-viva-ai is unreachable. It is
