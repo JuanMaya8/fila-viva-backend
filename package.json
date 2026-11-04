@@ -1,7 +1,7 @@
 {
   "name": "fila-viva-backend",
-  "version": "0.1.0",
-  "description": "Core backend API for Fila Viva: turns, agents, service types and real-time queue updates.",
+  "version": "1.0.0",
+  "description": "Core backend API for Fila Viva: auth, turns, advisors, service types and real-time queue predictions.",
   "license": "MIT",
   "private": true,
   "scripts": {
@@ -11,23 +11,36 @@
     "start:debug": "nest start --debug --watch",
     "start:prod": "node dist/main",
     "lint": "eslint \"{src,test}/**/*.ts\" --fix",
+    "migration:generate": "typeorm-ts-node-commonjs migration:generate -d src/database/data-source.ts",
+    "migration:run": "typeorm-ts-node-commonjs migration:run -d src/database/data-source.ts",
+    "migration:revert": "typeorm-ts-node-commonjs migration:revert -d src/database/data-source.ts",
+    "seed": "ts-node src/database/seeds/seed.ts",
+    "seed:prod": "node dist/database/seeds/seed.js",
     "test": "jest",
     "test:watch": "jest --watch",
-    "test:cov": "jest --coverage"
+    "test:cov": "jest --coverage",
+    "test:e2e": "jest --config ./test/jest-e2e.json --runInBand"
   },
   "dependencies": {
     "@nestjs/axios": "^3.0.0",
     "@nestjs/common": "^10.3.0",
     "@nestjs/config": "^3.2.0",
     "@nestjs/core": "^10.3.0",
+    "@nestjs/event-emitter": "^2.1.1",
+    "@nestjs/jwt": "^10.2.0",
     "@nestjs/platform-express": "^10.3.0",
     "@nestjs/platform-socket.io": "^10.3.0",
     "@nestjs/swagger": "^7.3.0",
+    "@nestjs/throttler": "^5.2.0",
     "@nestjs/typeorm": "^10.0.2",
     "@nestjs/websockets": "^10.3.0",
     "axios": "^1.6.8",
+    "bcryptjs": "^2.4.3",
     "class-transformer": "^0.5.1",
     "class-validator": "^0.14.1",
+    "dotenv": "^16.6.1",
+    "helmet": "^7.2.0",
+    "ioredis": "^5.11.1",
     "pg": "^8.11.5",
     "reflect-metadata": "^0.2.1",
     "rxjs": "^7.8.1",
@@ -38,9 +51,11 @@
     "@nestjs/cli": "^10.3.0",
     "@nestjs/schematics": "^10.1.0",
     "@nestjs/testing": "^10.3.0",
+    "@types/bcryptjs": "^2.4.6",
     "@types/express": "^4.17.21",
     "@types/jest": "^29.5.12",
     "@types/node": "^20.11.0",
+    "@types/supertest": "^7.2.1",
     "@typescript-eslint/eslint-plugin": "^7.0.0",
     "@typescript-eslint/parser": "^7.0.0",
     "eslint": "^8.57.0",
@@ -57,13 +72,19 @@
     "typescript": "^5.3.3"
   },
   "jest": {
-    "moduleFileExtensions": ["js", "json", "ts"],
+    "moduleFileExtensions": [
+      "js",
+      "json",
+      "ts"
+    ],
     "rootDir": "src",
     "testRegex": ".*\\.spec\\.ts$",
     "transform": {
       "^.+\\.(t|j)s$": "ts-jest"
     },
-    "collectCoverageFrom": ["**/*.(t|j)s"],
+    "collectCoverageFrom": [
+      "**/*.(t|j)s"
+    ],
     "coverageDirectory": "../coverage",
     "testEnvironment": "node"
   }
