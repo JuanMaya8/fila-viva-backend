@@ -1,117 +1,288 @@
 # Fila Viva — Backend
 
-API central de **Fila Viva**, el sistema de predicción inteligente de tiempos de espera (caso de estudio: turnos en hospitales, bancos, universidades y oficinas de atención al público). Este repositorio es **uno de tres**:
+API central de **Fila Viva** para una sucursal bancaria ficticia (Banco Demo). Autentica al personal, gestiona turnos, asesores y trámites, le pide a la IA cuánto va a esperar cada persona y empuja ese dato en vivo a cada pantalla. Este repositorio es **uno de tres**:
 
-| Repositorio | Qué hace | Estado |
+| Repositorio | Qué hace | Puerto |
 |---|---|---|
-| `fila-viva-backend` (este) | API core: turnos, funcionarios, tipos de trámite, tiempo real |
-| `fila-viva-frontend` | PWA del ciudadano, pantalla de sala y panel de funcionarios | 🟡 |
-| `fila-viva-ai` | Servicio de predicción (IA + teoría de colas) | |
+| `fila-viva-backend` (este) | API central, orquestación y tiempo real | 3000 |
+| `fila-viva-frontend` | Web/PWA del cliente, panel del asesor, panel del admin y pantalla de sala | 3001 |
+| `fila-viva-ai` | Modelos de ML + simulación de la cola | 8000 · gRPC 50051 |
 
-> Este documento está escrito para dos lectores a la vez: una persona del equipo, y una IA generadora de código a la que se le vaya a pedir que continúe el proyecto. Por eso es más explícito de lo normal sobre decisiones, convenciones y pendientes.
-
----
-
-## 1. Qué es Fila Viva
-
-En una fila real, "turno 52" no dice cuánto tiempo real vas a esperar. Fila Viva calcula ese tiempo dinámicamente combinando:
-
-- datos en tiempo real (personas delante, funcionarios activos ahora mismo),
-- datos históricos (duración típica de ese trámite, por hora y día),
-- un modelo de machine learning y una fórmula clásica de teoría de colas como comparación.
-
-Este backend es el orquestador: recibe los turnos, conoce el estado de los funcionarios, le pregunta al servicio de IA (`fila-viva-ai`) cuánto va a demorar, y empuja esa respuesta en tiempo real a quien está esperando (`fila-viva-frontend`).
+El orden de arranque, el script `start-all.ps1` y el guion de demo están en `README-GENERAL.md`, en la carpeta que contiene los tres repositorios.
 
 ---
 
-## 2. Estado del avance — qué SÍ y qué NO está hecho
-
-**Hecho en este avance:**
-- Estructura del proyecto en NestJS + TypeScript, modular y lista para crecer.
-- Conexión a PostgreSQL vía TypeORM, con `synchronize` activo solo en desarrollo.
-- Entidades: `Turn`, `Agent`, `ServiceType`.
-- CRUD básico de `agents` y `service-types`.
-- Flujo completo de `turns`: crear turno → contar personas delante → contar funcionarios activos → pedirle la predicción al servicio de IA → devolver todo junto → avisar por WebSocket.
-- Cliente HTTP hacia `fila-viva-ai` (`PredictionService`), con una estimación clásica de respaldo si el servicio de IA todavía no está levantado (para poder seguir probando el backend sin depender de que la IA ya exista).
-- Gateway de WebSocket (`TurnsGateway`) con salas por tipo de trámite.
-- Swagger en `/docs`.
-- Docker Compose con PostgreSQL y Redis para desarrollo local.
-- Un test unitario de ejemplo (`turns.service.spec.ts`) que valida el flujo de creación de un turno.
-
-**Explícitamente NO hecho todavía (para las próximas semanas):**
-- No hay autenticación ni roles (Cognito/JWT). Todos los endpoints están abiertos.
-- No hay bus de eventos (Kafka / Redis Streams). Los `TODO` en el código marcan dónde va a ir cada evento (`turn.created`, `agent.status.changed`, etc.).
-- No hay entidad `Institution` todavía: `institutionId` se recibe como dato suelto, sin validar que exista.
-- No hay migraciones de TypeORM (se usa `synchronize`, que no es apto para producción).
-- Redis está en `docker-compose.yml` pero todavía no se usa desde el código (el estado "caliente" de la cola hoy se calcula con una consulta a PostgreSQL en cada request).
-- No hay CI/CD configurado.
-- La retroalimentación de la etapa 9 del pipeline de IA (comparar predicción vs. tiempo real) está marcada con `TODO` en `markCompleted()`, pero no se envía a ningún lado todavía.
-
----
-
-## 3. Arquitectura completa del sistema
+## 1. Arquitectura
 
 ```mermaid
-flowchart TD
-    subgraph Cliente["Capa cliente (fila-viva-frontend)"]
-        PWA[PWA del ciudadano]
-        Kiosco[Pantalla de sala]
-        Panel[Panel de funcionarios]
+flowchart LR
+    subgraph FE[fila-viva-frontend]
+      C[Cliente /turno]
+      A[Asesor /advisor]
+      M[Admin /admin]
+      D[Sala /display]
     end
-
-    subgraph Entrada["Puerta de entrada"]
-        GW[API Gateway]
-        WS[Gateway de tiempo real]
+    subgraph BE[fila-viva-backend]
+      API[Controllers + guards JWT/roles]
+      T[TurnsService<br/>máquina de estados]
+      EV((EventEmitter2<br/>queue.**))
+      O[QueueOrchestrator]
+      GW[RealtimeGateway<br/>Socket.io]
     end
+    AI[fila-viva-ai<br/>/predict/queue o gRPC]
+    PG[(PostgreSQL)]
+    RD[(Redis)]
 
-    subgraph Backend["fila-viva-backend (este repo)"]
-        Turnos[Modulo turns]
-        Agentes[Modulo agents]
-        Tipos[Modulo service-types]
-        PredClient[PredictionService - cliente HTTP]
-    end
-
-    subgraph IA["fila-viva-ai"]
-        Pred[Servicio de prediccion FastAPI]
-        Modelo[Modelo ML + linea base M/M/c]
-    end
-
-    subgraph Datos["Datos"]
-        PG[(PostgreSQL)]
-        Redis[(Redis)]
-    end
-
-    PWA --> GW --> Turnos
-    Kiosco -.WebSocket.-> WS
-    Panel --> GW
-    Turnos --> Agentes
-    Turnos --> Tipos
-    Turnos --> PG
-    Agentes --> PG
-    Tipos --> PG
-    Turnos --> PredClient -->|POST /predict| Pred --> Modelo
-    Turnos -->|broadcastQueueUpdate| WS --> Kiosco
-    WS --> PWA
-    Turnos -.futuro: cache de estado.-> Redis
+    FE -- HTTP vía /api/backend --> API --> T --> PG
+    T -- evento --> EV --> O
+    O -- 1 llamada batch --> AI
+    O -- snapshot --> RD
+    O -- fan-out por salas --> GW -- WebSocket --> FE
+    GW <-. pub/sub multi-instancia .-> RD
 ```
 
-**Capas y su estado en este repositorio:**
+**Flujo de un evento** (crear, cancelar, llamar, iniciar, ausente o finalizar un turno; actualizar el progreso; cambiar el estado de un asesor o la configuración):
 
-1. **Capa cliente** — vive en `fila-viva-frontend`. No implementada acá.
-2. **Puerta de entrada** — en este avance, el backend expone los endpoints directamente (sin API Gateway ni CDN todavía; eso es infraestructura de despliegue, no código de este avance).
-3. **Microservicios de dominio** — implementados como *módulos* dentro de un único servicio NestJS por ahora (`turns`, `agents`, `service-types`). La arquitectura final los separa en servicios independientes; en esta etapa viven juntos a propósito, para avanzar rápido sin la complejidad operativa de varios despliegues. Separarlos es un paso de refactor, no de reescritura: cada módulo ya está aislado con su propio controller/service/module.
-4. **Bus de eventos** — no implementado. Los puntos exactos donde debe conectarse Kafka están marcados con `// TODO` en el código (`agents.service.ts`, `turns.service.ts`).
-5. **Datos** — PostgreSQL implementado. TimescaleDB, S3 y el uso real de Redis quedan para cuando haya suficiente historial que guardar.
-6. **Plataforma de IA** — vive en `fila-viva-ai`. Este backend ya tiene el cliente HTTP listo para consumirla (`PredictionModule`), con un *fallback* a una estimación clásica si la IA no responde.
-7. **Infraestructura cloud** — no implementada. `Dockerfile` y `docker-compose.yml` cubren desarrollo local; el despliegue a AWS (ECS Fargate, RDS, Cognito, etc.) es una etapa posterior.
+1. El servicio de dominio guarda el cambio en PostgreSQL (con transacción y lock cuando corresponde) y publica un evento `queue.*` en EventEmitter2.
+2. `QueueOrchestrator` lo recibe, carga el estado de la sucursal desde PostgreSQL y llama **una sola vez** a la IA (`POST /predict/queue`, o gRPC si `PREDICTION_TRANSPORT=grpc`).
+3. Si la IA falla o tarda más de `PREDICTION_TIMEOUT_MS`, usa la estimación de respaldo (`source: "fallback"`). Crear un turno nunca falla por culpa de la IA.
+4. Guarda el snapshot en Redis (`fv:queue:{institutionId}`). Si Redis no está, el snapshot se reconstruye desde PostgreSQL cuando se pide.
+5. **Fan-out**: un snapshot se reparte solo a las salas afectadas (`turn:{id}` de cada turno abierto, `queue:{serviceTypeId}`, `display:{institutionId}`, `admin:{institutionId}`, `advisor:{agentId}`). Con `REDIS_URL`, el adaptador `@socket.io/redis-adapter` publica cada emisión en Redis y **todas las instancias** del backend la entregan a sus sockets.
 
----
+Si llegan varios eventos mientras se recalcula, se agrupan en **una sola** corrida siguiente. Además, cada `QUEUE_REFRESH_SECONDS` se recalculan las sucursales con turnos abiertos, porque el tiempo transcurrido cambia el restante.
 
-## 4. Contrato con `fila-viva-ai`
+**Dónde entraría Kafka** (no está instalado a propósito): cada constante de `src/common/events/queue-events.ts` corresponde a un tópico (`queue.turn.created` → `fila-viva.turn.created`). Basta con reemplazar `eventEmitter.emit/emitAsync` por un productor Kafka y registrar `QueueOrchestrator` como consumidor; los payloads ya son JSON plano.
 
-El backend llama a `POST {PREDICTION_SERVICE_URL}/predict`. Este es el contrato que **el repositorio `fila-viva-ai` debe cumplir** (está definido en `src/modules/prediction/interfaces/prediction-result.interface.ts`):
+## 2. Modelo de datos
 
-**Request:**
+| Entidad | Para qué |
+|---|---|
+| `Institution` | Sucursal (código, nombre, zona horaria). Todo pertenece a una y se valida que exista |
+| `User` | Admin o asesor que inicia sesión (contraseña con bcrypt, nunca se devuelve) |
+| `Agent` | Perfil del asesor: ventanilla, estado (`available`, `busy`, `on_break`, `offline`), trámites que atiende |
+| `ServiceType` + `ServiceStep` | Trámite configurable (nombre, prefijo del turno, duración media) y sus pasos |
+| `Turn` | Turno con prioridad, asesor, marcas de llamado, inicio y fin, y la **predicción hecha al crearse** |
+| `ServiceProgress` | Pasos completados, notas y bandera de caso complejo de la atención en curso |
+| `PredictionLog` | Predicho vs. real al finalizar (espera y duración): alimenta el reentrenamiento y el tablero |
+
+El esquema se crea **solo con migraciones** (`src/database/migrations`); no hay `synchronize`. `DropLegacySchema` elimina las tablas creadas con `synchronize` en la semana 3, que solo tenían datos ficticios, únicamente si detecta ese esquema viejo.
+
+**Máquina de estados del turno** (`src/common/utils/turn-state-machine.ts`): `created → called → in_service → completed`, más `called → absent` y `created|called → cancelled`. Cualquier otra transición responde **409**.
+
+**"Llamar siguiente"** es atómico: bloquea la fila del asesor (`FOR UPDATE`) y toma el turno con `FOR UPDATE SKIP LOCKED`, ordenando por preferencial, luego antigüedad, luego id. Dos asesores nunca obtienen el mismo turno, y la IA simula con la misma regla.
+
+Un turno llamado que no se presenta en `ABSENT_TIMEOUT_MINUTES` se marca ausente automáticamente. Un asesor sin sockets abiertos durante `ADVISOR_DISCONNECT_GRACE_SECONDS` pasa a `offline` (si no está atendiendo). Ambas cosas recalculan la cola.
+
+## 3. Seguridad
+
+- **JWT** firmado con `JWT_SECRET` y guardado en cookie `fv_token` httpOnly, `SameSite=Lax`, `Secure` en producción. También se acepta `Authorization: Bearer` (Swagger).
+- Guard global: todo requiere sesión salvo lo marcado con `@Public()`; `@Roles(...)` limita por rol. Si el usuario se desactiva, sus sesiones dejan de servir de inmediato.
+- Públicos, solo: `GET /health`, `POST /auth/login`, `POST /auth/logout`, `GET /institutions`, `GET /service-types?institutionId=`, `POST /turns`, `GET /turns/:id`, `POST /turns/:id/cancel` (el id es un UUID imposible de adivinar) y `GET /display` (sin datos personales).
+- Rate limit en login (`RATE_LIMIT_LOGIN_PER_MINUTE`) y en la creación pública de turnos (`RATE_LIMIT_TURNS_PER_MINUTE`).
+- Helmet, y CORS de HTTP y WebSocket limitado a `FRONTEND_URL`.
+- Los sockets de admin y asesor se autentican con un token de 5 minutos (`POST /auth/socket-token`).
+- `/internal/history` exige `X-API-Key = INTERNAL_API_KEY`, la misma clave con la que el backend llama a la IA.
+- Errores sin stack trace hacia el cliente (se registran en el servidor). Entradas validadas con class-validator (`whitelist` + `forbidNonWhitelisted`).
+- El admin inicial sale de `ADMIN_EMAIL` / `ADMIN_PASSWORD` al correr el seed; nunca está en el código.
+
+## 4. Endpoints
+
+| Método | Ruta | Rol | Qué hace |
+|---|---|---|---|
+| POST | `/auth/login` · `/auth/logout` | público | Inicia o cierra sesión (cookie httpOnly) |
+| GET | `/auth/me` | sesión | Usuario actual |
+| POST | `/auth/socket-token` | sesión | Token corto para Socket.io |
+| GET | `/institutions` | público | Sucursales (id, código, nombre) |
+| GET | `/service-types?institutionId=` | público | Trámites activos con espera estimada actual |
+| GET · POST · PATCH | `/service-types/manage` · `/service-types` · `/service-types/:id` | admin | Gestión de trámites y pasos |
+| GET · POST · PATCH | `/agents` · `/agents/:id` | admin | Crear, editar, desactivar asesores |
+| POST | `/agents/:id/reset-password` | admin | Restablecer contraseña |
+| GET · PATCH | `/agents/me` · `/agents/me/status` | asesor | Panel propio; Disponible / En pausa |
+| POST | `/turns` | público | Tomar turno (`preferential` opcional) |
+| GET | `/turns/:id` · POST `/turns/:id/cancel` | público | Ver o cancelar el propio turno |
+| GET | `/turns?serviceTypeId=` | admin, asesor | Fila con la posición real de cada turno |
+| POST | `/turns/call-next` | asesor | Llamar siguiente (atómico) |
+| POST | `/turns/:id/start` · `/absent` · `/complete` | asesor | Llegó · ausente · finalizar (`{ "callNext": true }`) |
+| PATCH | `/turns/:id/progress` | asesor | Pasos, notas, caso complejo |
+| GET | `/dashboard` · `/dashboard/model` | admin | Tablero e información del modelo |
+| POST | `/dashboard/retrain` | admin | Reentrena la IA con el historial real |
+| GET | `/display?institutionId=` | público | Pantalla de sala |
+| GET | `/internal/history` | `X-API-Key` | Historial predicho vs. real para la IA |
+| GET | `/health` | público | Estado de PostgreSQL y Redis |
+
+Swagger con Bearer y cookie en <http://localhost:3000/docs>.
+
+## 5. Cómo correrlo (Windows, PowerShell)
+
+Requisitos: Node 20+, Docker Desktop (o PostgreSQL 16 y Redis instalados localmente).
+
+```powershell
+cd "C:\Users\Acer\Desktop\PROYECTO 1 Fil\fila-viva-backend"
+docker compose up -d                 # PostgreSQL en 5433 y Redis en 6379
+npm install
+Copy-Item .env.example .env          # completa JWT_SECRET, INTERNAL_API_KEY, ADMIN_*
+npm run seed                         # migraciones + sucursal + admin + 7 trámites
+npm run start:dev                    # http://localhost:3000/docs
+```
+
+**Sin Docker**: instala PostgreSQL 16, crea el usuario y la base `filaviva` y ajusta `DB_HOST`, `DB_PORT` (5432), `DB_USERNAME` y `DB_PASSWORD`. Redis es opcional: deja `REDIS_URL=` vacío y el sistema usa solo PostgreSQL (y Socket.io en una sola instancia).
+
+Migraciones:
+
+```powershell
+npm run migration:run
+npm run migration:generate -- src/database/migrations/NombreDelCambio
+npm run migration:revert
+```
+
+Tests:
+
+```powershell
+npm test            # 34 unitarios: estados, auth y guards, orden de llamada y fallback, orquestador
+npm run test:e2e    # flujo principal con supertest sobre la base filaviva_e2e (se crea sola)
+npm run lint
+```
+
+El e2e apaga la IA a propósito para comprobar que todo funciona con `source: "fallback"`.
+
+## 6. Variables de entorno
+
+Todas están documentadas en `.env.example`. Las imprescindibles son `JWT_SECRET`, `INTERNAL_API_KEY` (igual en la IA), `ADMIN_EMAIL`/`ADMIN_PASSWORD` (para el seed), `FRONTEND_URL` (puede ser una lista separada por comas) y la conexión a PostgreSQL (`DATABASE_URL` **o** `DB_*`). Opcionales: `REDIS_URL`, `PREDICTION_TRANSPORT=grpc` con `PREDICTION_GRPC_URL`, tiempos de cola y límites de tasa.
+
+## 7. Despliegue (Render + Neon)
+
+`render.yaml` crea el servicio. Antes de desplegar, configura en Render:
+
+| Variable | Valor |
+|---|---|
+| `DATABASE_URL` | Cadena de conexión de Neon (secreta) |
+| `INTERNAL_API_KEY` | La misma del servicio `fila-viva-ai` |
+| `ADMIN_EMAIL` / `ADMIN_PASSWORD` | Credenciales del admin inicial |
+| `FRONTEND_URL` | URL de Vercel, p. ej. `https://fila-viva-frontend.vercel.app` (más `http://localhost:3001` si quieres probar local) |
+| `REDIS_URL` | Opcional (Render Key Value) |
+
+`JWT_SECRET` lo genera Render. El arranque ejecuta `npm run seed:prod` (migraciones e inserción idempotente) y luego la API. **Ojo:** el primer despliegue elimina las tablas de demo creadas con `synchronize` (migración `DropLegacySchema`), que solo contenían datos ficticios.
+
+## Contratos entre repositorios
+
+> Esta sección es idéntica en los tres README. Todos los campos van en camelCase. Tipos: TypeScript en `fila-viva-backend/src/modules/prediction/interfaces/prediction-result.interface.ts` y `src/modules/queue/interfaces/queue-views.interface.ts`, TypeScript en `fila-viva-frontend/src/lib/types.ts`, y Pydantic en `fila-viva-ai/app/schemas.py`. El contrato gRPC equivalente está en `proto/fila_viva_prediction.proto` (igual en la IA y en el backend). Si cambias un contrato, actualízalo en los tres repositorios.
+
+### Backend → IA (todas las rutas excepto `/health` llevan el header `X-API-Key: <INTERNAL_API_KEY>`)
+
+**`POST /predict/queue`**: una llamada por evento de la cola, con toda la sucursal. Los turnos cuyo `turnId` empieza por `probe:` son hipotéticos ("si alguien llega ahora") y alimentan la espera estimada que se muestra antes de tomar turno.
+
+```json
+{
+  "timestamp": "2026-11-03T15:30:00.000Z",
+  "utcOffsetMinutes": -300,
+  "serviceTypes": [
+    { "id": "6f1c9a52-6a4e-4d5e-9a57-2a0f2b7c1a10", "avgServiceMinutes": 3, "stepsTotal": 3 },
+    { "id": "0b8e4d3c-2f7a-4b61-8d2e-91c5a7e4f220", "avgServiceMinutes": 35, "stepsTotal": 6 }
+  ],
+  "advisors": [
+    {
+      "id": "a3d2c1b0-1111-4c2d-9e8f-0a1b2c3d4e5f",
+      "status": "busy",
+      "serviceTypeIds": ["6f1c9a52-6a4e-4d5e-9a57-2a0f2b7c1a10", "0b8e4d3c-2f7a-4b61-8d2e-91c5a7e4f220"],
+      "speedFactor": 1.0,
+      "statusSinceSeconds": 240,
+      "currentTurn": {
+        "turnId": "5e0f7a1c-2222-4b3c-8d4e-5f6a7b8c9d0e",
+        "serviceTypeId": "0b8e4d3c-2f7a-4b61-8d2e-91c5a7e4f220",
+        "status": "in_service",
+        "elapsedSeconds": 600,
+        "stepsCompleted": 2,
+        "stepsTotal": 6,
+        "isComplex": false
+      }
+    }
+  ],
+  "waitingTurns": [
+    {
+      "turnId": "9c8b7a6d-3333-4e5f-8a9b-0c1d2e3f4a5b",
+      "serviceTypeId": "6f1c9a52-6a4e-4d5e-9a57-2a0f2b7c1a10",
+      "preferential": false,
+      "createdAt": "2026-11-03T15:21:00.000Z"
+    },
+    {
+      "turnId": "probe:6f1c9a52-6a4e-4d5e-9a57-2a0f2b7c1a10",
+      "serviceTypeId": "6f1c9a52-6a4e-4d5e-9a57-2a0f2b7c1a10",
+      "preferential": false,
+      "createdAt": "2026-11-03T15:30:00.000Z"
+    }
+  ]
+}
+```
+
+```json
+{
+  "source": "model",
+  "modelVersion": "lgbm-20261104001134",
+  "congestionLevel": "medium",
+  "turns": [
+    {
+      "turnId": "9c8b7a6d-3333-4e5f-8a9b-0c1d2e3f4a5b",
+      "peopleAhead": 0,
+      "estimatedWaitMinutes": 18.4,
+      "lowerMinutes": 11.4,
+      "upperMinutes": 29.2,
+      "confidence": 57,
+      "traditionalEstimateMinutes": 0.0,
+      "congestionLevel": "medium"
+    },
+    {
+      "turnId": "probe:6f1c9a52-6a4e-4d5e-9a57-2a0f2b7c1a10",
+      "peopleAhead": 1,
+      "estimatedWaitMinutes": 21.8,
+      "lowerMinutes": 14.4,
+      "upperMinutes": 33.7,
+      "confidence": 58,
+      "traditionalEstimateMinutes": 10.8,
+      "congestionLevel": "medium"
+    }
+  ],
+  "inService": [
+    {
+      "turnId": "5e0f7a1c-2222-4b3c-8d4e-5f6a7b8c9d0e",
+      "remainingMinutes": 19.4,
+      "lowerMinutes": 11.5,
+      "upperMinutes": 33.4,
+      "expectedTotalMinutes": 29.4
+    }
+  ]
+}
+```
+
+`source` vale `model` (modelos entrenados), `baseline` (M/M/c dentro de la IA) o `fallback` (estimación del backend cuando la IA no responde). `peopleAhead` cuenta los turnos del mismo trámite que se llamarán antes (preferencial primero, luego el más antiguo). `traditionalEstimateMinutes` = `peopleAhead × 10.8`.
+
+**`POST /predict/remaining`**: tiempo restante de una atención en curso.
+
+```json
+{
+  "avgServiceMinutes": 25,
+  "stepsTotal": 6,
+  "stepsCompleted": 3,
+  "elapsedSeconds": 720,
+  "isComplex": false,
+  "advisorSpeedFactor": 1.0,
+  "timestamp": "2026-11-03T15:30:00.000Z",
+  "utcOffsetMinutes": -300
+}
+```
+
+```json
+{
+  "remainingMinutes": 9.4,
+  "lowerMinutes": 5.0,
+  "upperMinutes": 16.9,
+  "expectedTotalMinutes": 21.4,
+  "source": "model",
+  "modelVersion": "lgbm-20261104001134"
+}
+```
+
+**`POST /predict`**: contrato original de la semana 3, se mantiene (`avgServiceMinutes` es opcional).
+
 ```json
 {
   "peopleAhead": 8,
@@ -121,133 +292,84 @@ El backend llama a `POST {PREDICTION_SERVICE_URL}/predict`. Este es el contrato 
 }
 ```
 
-**Response esperada:**
 ```json
 {
-  "estimatedWaitMinutes": 31,
-  "confidence": 87,
+  "estimatedWaitMinutes": 36,
+  "confidence": 73,
   "traditionalEstimateMinutes": 86,
-  "congestionLevel": "low"
+  "congestionLevel": "high"
 }
 ```
 
-Si `fila-viva-ai` todavía no está levantado o falla, `PredictionService` no rompe la creación del turno: calcula una estimación clásica de respaldo con la misma forma de respuesta, para que el resto del sistema nunca dependa de que la IA esté arriba.
+**IA → Backend: `GET /internal/history`** (header `X-API-Key`), usado por `POST /train` para mezclar datos reales:
 
----
-
-## 5. Stack de este repositorio
-
-| Pieza | Tecnología | Por qué |
-|---|---|---|
-| Lenguaje | TypeScript | Mismo lenguaje que el frontend, tipado fuerte para un dominio con muchos estados (turno, agente). |
-| Framework | NestJS | Estructura modular pensada para crecer hacia microservicios sin reescribir nada. |
-| ORM | TypeORM | Entidades como clases TypeScript, migraciones cuando el esquema se estabilice. |
-| Base de datos | PostgreSQL | Fuente de verdad transaccional. |
-| Cache / tiempo real (pendiente de uso) | Redis | Estado "caliente" de cada cola y pub/sub para WebSocket. |
-| Tiempo real | Socket.io sobre `@nestjs/websockets` | Salas por tipo de trámite, reconexión automática. |
-| Documentación de API | Swagger (`@nestjs/swagger`) | Contrato vivo, consultable en `/docs`. |
-| Contenedores | Docker + Docker Compose | Entorno de desarrollo reproducible. |
-
----
-
-## 6. Estructura de carpetas
-
-```
-src/
-├── main.ts                     # bootstrap, Swagger, ValidationPipe
-├── app.module.ts                # módulo raíz, conexión a TypeORM
-├── config/
-│   └── configuration.ts         # variables de entorno tipadas
-├── common/
-│   ├── enums/                   # TurnStatus, AgentStatus
-│   └── filters/                 # manejo centralizado de errores HTTP
-└── modules/
-    ├── health/                  # GET /health
-    ├── agents/                  # funcionarios: entidad, DTOs, service, controller
-    ├── service-types/           # tipos de trámite
-    ├── turns/                   # turnos + WebSocket gateway (el módulo central)
-    └── prediction/               # cliente HTTP hacia fila-viva-ai
+```json
+{
+  "count": 1,
+  "records": [
+    {
+      "serviceTypeId": "6f1c9a52-6a4e-4d5e-9a57-2a0f2b7c1a10",
+      "agentId": "a3d2c1b0-1111-4c2d-9e8f-0a1b2c3d4e5f",
+      "avgServiceMinutes": 3,
+      "stepsTotal": 3,
+      "isComplex": false,
+      "startedAt": "2026-11-03T15:31:00.000Z",
+      "actualServiceMinutes": 2.6,
+      "predictedServiceMinutes": 3.1,
+      "actualWaitMinutes": 4.2,
+      "predictedWaitMinutes": 3.4,
+      "traditionalWaitMinutes": 10.8
+    }
+  ]
+}
 ```
 
-Cada módulo de dominio sigue el mismo patrón: `entities/`, `dto/`, `*.service.ts`, `*.controller.ts`, `*.module.ts`. Si se agrega un módulo nuevo, seguir esta misma forma para que el proyecto se mantenga predecible.
+### Backend → Frontend
 
----
+**Turno (`POST /turns`, `GET /turns/:id`, evento `turnUpdate`)**:
 
-## 7. Cómo correrlo localmente
-
-```bash
-# 1. Levantar PostgreSQL y Redis
-docker compose up -d
-
-# 2. Instalar dependencias
-npm install
-
-# 3. Copiar variables de entorno
-cp .env.example .env
-
-# 4. Levantar el backend en modo desarrollo
-npm run start:dev
-
-# 5. Abrir la documentación interactiva
-# http://localhost:3000/docs
-
-# 6. Correr los tests
-npm test
+```json
+{
+  "id": "9c8b7a6d-3333-4e5f-8a9b-0c1d2e3f4a5b",
+  "ticketNumber": 12,
+  "ticketCode": "C-012",
+  "status": "created",
+  "serviceTypeId": "6f1c9a52-6a4e-4d5e-9a57-2a0f2b7c1a10",
+  "serviceTypeName": "Consulta rápida",
+  "preferential": false,
+  "peopleAhead": 2,
+  "estimatedWaitMinutes": 6.4,
+  "lowerMinutes": 3.9,
+  "upperMinutes": 9.8,
+  "confidence": 74,
+  "traditionalEstimateMinutes": 21.6,
+  "congestionLevel": "low",
+  "source": "model",
+  "windowNumber": null,
+  "createdAt": "2026-11-03T15:21:00.000Z",
+  "calledAt": null,
+  "estimatedAt": "2026-11-03T15:30:00.000Z"
+}
 ```
 
----
+Estados del turno: `created → called → in_service → completed`, más `absent` (desde `called`) y `cancelled` (desde `created` o `called`). Cualquier otra transición responde **409**.
 
-## 8. Endpoints disponibles en este avance
+**Socket.io** (URL `NEXT_PUBLIC_WS_URL`):
 
-| Método | Ruta | Qué hace |
-|---|---|---|
-| GET | `/health` | Estado del servicio |
-| POST | `/service-types` | Crea un tipo de trámite |
-| GET | `/service-types?institutionId=` | Lista tipos de trámite |
-| GET | `/service-types/:id` | Detalle de un tipo de trámite |
-| POST | `/agents` | Da de alta un funcionario |
-| GET | `/agents?institutionId=` | Lista funcionarios |
-| PATCH | `/agents/:id/status` | Cambia el estado de un funcionario |
-| POST | `/turns` | Crea un turno y devuelve su predicción |
-| GET | `/turns?serviceTypeId=` | Lista los turnos activos de una fila |
-| PATCH | `/turns/:id/complete` | Marca un turno como atendido |
+| El cliente emite | Sala | El servidor emite | Contenido |
+|---|---|---|---|
+| `joinTurn(turnId)` | `turn:{id}` | `turnUpdate` | Turno (arriba) |
+| `joinQueue(serviceTypeId)` | `queue:{serviceTypeId}` | `queueUpdate` | Resumen de la fila: `waiting`, `activeAdvisors`, `estimatedWaitMinutes`, `confidence`, `congestionLevel` |
+| `joinDisplay(institutionId)` | `display:{institutionId}` | `displayUpdate` | Turnos llamados con ventanilla, próximos turnos y espera por trámite (sin datos personales) |
+| handshake `auth.token` de admin | `admin:{institutionId}` | `dashboardUpdate` | Tablero del admin |
+| handshake `auth.token` de asesor | `advisor:{agentId}` | `advisorUpdate` | Panel del asesor |
 
-WebSocket: conectarse al servidor y emitir `joinQueue` con un `serviceTypeId` para recibir el evento `queueUpdate` cada vez que esa fila cambia.
+El token de socket se obtiene con `POST /auth/socket-token` (dura 5 minutos), porque la cookie de sesión es httpOnly. Cada `join*` tiene su `leave*`.
 
----
+## Notas para quien continúe el proyecto (persona o IA)
 
-## 9. Próximos pasos (backlog inmediato, en orden sugerido)
-
-1. Entidad `Institution` + validación real de `institutionId`.
-2. Autenticación (Cognito o JWT propio) y roles: ciudadano, funcionario, supervisor, administrador.
-3. Publicar eventos reales (`turn.created`, `turn.completed`, `agent.status.changed`) a Redis Streams o Kafka, y que `TurnsGateway` escuche de ahí en vez de que `TurnsService` lo llame directo.
-4. Mover el conteo de "personas delante" y "funcionarios activos" a una lectura de Redis en vez de contar filas en PostgreSQL en cada request.
-5. Migraciones de TypeORM en vez de `synchronize`.
-6. Enviar el resultado de `markCompleted()` (predicción vs. tiempo real) a `fila-viva-ai` como feedback de reentrenamiento.
-7. CI en GitHub Actions: lint + test en cada pull request.
-
----
-
-## 10. Notas para una IA generadora de código
-
-Si estás retomando este proyecto para generar más código, ten en cuenta:
-
-- **Todo el código va en inglés** (nombres de variables, funciones, clases, comentarios). Este `README.md` y los demás documentos del proyecto van en español.
-- Seguí el patrón de módulo ya establecido (`entities/`, `dto/`, `*.service.ts`, `*.controller.ts`, `*.module.ts`) para cualquier módulo nuevo.
-- Los comentarios `// TODO:` en el código no son ruido: marcan exactamente dónde continúa el trabajo pendiente descrito en la sección 9. Antes de "inventar" una forma nueva de resolver algo, revisá si ya hay un `TODO` que describe la solución esperada.
-- El contrato con `fila-viva-ai` (sección 4) es la interfaz más importante del sistema: si lo cambiás en un repositorio, cambialo también en el otro y actualizá ambos `README.md`.
-- No agregues autenticación real todavía sin coordinarlo: no hay decisión tomada aún sobre si va a ser Cognito administrado o un JWT propio con `@nestjs/passport`.
-- `synchronize: true` en TypeORM es temporal y solo corre si `NODE_ENV !== 'production'`. No lo dejes activo si agregás lógica de despliegue a producción: reemplazalo por migraciones.
-
-## 11. Despliegue gratis de demo en Render
-
-El archivo `render.yaml` crea el backend como servicio gratuito en Render. La base de datos se aloja por separado en Neon:
-
-1. Crea un proyecto PostgreSQL gratuito en Neon y copia su connection string; mantenlo privado.
-2. En Render, crea un **Blueprint** desde el repositorio `fila-viva-backend` y selecciona la rama `main`.
-3. Cuando Render solicite `DATABASE_URL`, pega el connection string de Neon como variable secreta. No lo pongas en el repositorio ni en este README.
-4. Confirma que el servicio quede en el plan **Free** y despliega. `PREDICTION_SERVICE_URL` ya apunta al servicio `fila-viva-ai`.
-5. Verifica `https://<url-del-backend>/health` y abre `/docs` para probar la API.
-
-`DB_SYNCHRONIZE=true` está configurado únicamente para crear las tablas iniciales de esta demo, porque el proyecto todavía no tiene migraciones. Úsalo solo con datos ficticios; antes de producción, agrega y ejecuta migraciones y desactiva esa variable. El servicio gratuito de Render puede suspenderse con inactividad y tardar alrededor de un minuto en despertar.
-- Este repositorio es uno de tres. No dupliques lógica de negocio del backend en el frontend, ni lógica de predicción acá: la única razón de ser de `PredictionService` es llamar a `fila-viva-ai`, nunca reimplementar el modelo localmente.
+- Código, comentarios y commits en inglés; los README en español.
+- Cada módulo sigue el patrón `entities/`, `dto/`, `*.service.ts`, `*.controller.ts`, `*.module.ts`.
+- Nada de lógica de predicción aquí, salvo `fallback-estimator.ts`, que solo actúa cuando la IA no responde.
+- Un cambio de esquema siempre va con una migración. No reactivar `synchronize`.
+- Si cambia la regla de "llamar siguiente", cámbiala también en la simulación de la IA (`app/simulation.py`).
