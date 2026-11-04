@@ -10,7 +10,7 @@ import { RealtimeIoAdapter } from './modules/realtime/realtime-io.adapter';
 
 const REQUIRED_ENV = ['JWT_SECRET', 'INTERNAL_API_KEY'];
 
-export function configureApp(app: NestExpressApplication): void {
+export async function configureApp(app: NestExpressApplication): Promise<void> {
   const config = app.get(ConfigService);
   const origins = config.get<string[]>('frontendUrls')!;
 
@@ -23,7 +23,9 @@ export function configureApp(app: NestExpressApplication): void {
     }),
   );
   app.enableCors({ origin: origins, credentials: true });
-  app.useWebSocketAdapter(new RealtimeIoAdapter(app, origins));
+  const ioAdapter = new RealtimeIoAdapter(app, origins);
+  await ioAdapter.connectToRedis(config.get<string>('redis.url')!);
+  app.useWebSocketAdapter(ioAdapter);
   app.useGlobalPipes(
     new ValidationPipe({
       whitelist: true,
@@ -45,7 +47,7 @@ async function bootstrap(): Promise<void> {
   }
 
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
-  configureApp(app);
+  await configureApp(app);
 
   const swagger = new DocumentBuilder()
     .setTitle('Fila Viva - Backend API')

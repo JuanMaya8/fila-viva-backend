@@ -10,6 +10,7 @@ import {
   WebSocketGateway,
   WebSocketServer,
 } from '@nestjs/websockets';
+import { RedisAdapter } from '@socket.io/redis-adapter';
 import { isUUID } from 'class-validator';
 import { Server, Socket } from 'socket.io';
 import {
@@ -148,13 +149,33 @@ export class RealtimeGateway
     return this.leaveById(client, institutionId, Rooms.display);
   }
 
-  /** True when the advisor has at least one live socket. */
-  isAdvisorConnected(agentId: string): boolean {
-    return (this.advisorSockets.get(agentId)?.size ?? 0) > 0;
+  /**
+   * Advisors with at least one live socket. With the Redis adapter the
+   * lookup spans every backend instance; otherwise it is the local map.
+   */
+  async connectedAdvisors(agentIds: string[]): Promise<Set<string>> {
+    if (!this.clustered) {
+      return new Set(agentIds.filter((id) => this.advisorSockets.has(id)));
+    }
+    const checks = await Promise.all(
+      agentIds.map(async (id) => {
+        const sockets = await this.server.in(Rooms.advisor(id)).fetchSockets();
+        return sockets.length > 0 ? id : null;
+      }),
+    );
+    return new Set(checks.filter((id): id is string => id !== null));
   }
 
+  /** Local shortcut to skip building payloads nobody receives. */
   hasMembers(room: string): boolean {
+    if (this.clustered) {
+      return true;
+    }
     return (this.server?.sockets.adapter.rooms.get(room)?.size ?? 0) > 0;
+  }
+
+  private get clustered(): boolean {
+    return this.server?.sockets.adapter instanceof RedisAdapter;
   }
 
   emitTo(room: string, event: string, payload: unknown): void {
@@ -184,9 +205,12 @@ export class RealtimeGateway
     if (existing) {
       clearTimeout(existing);
     }
-    const timer = setTimeout(() => {
+    const timer = setTimeout(async () => {
       this.disconnectTimers.delete(agentId);
-      if (this.isAdvisorConnected(agentId)) {
+      const connected = await this.connectedAdvisors([agentId]).catch(
+        () => new Set<string>(),
+      );
+      if (connected.has(agentId)) {
         return;
       }
       this.logger.log(`Advisor ${agentId} disconnected`);
