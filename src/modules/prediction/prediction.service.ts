@@ -3,6 +3,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { firstValueFrom } from 'rxjs';
 import { fallbackQueueEstimate } from './fallback-estimator';
+import { PredictionGrpcClient } from './prediction-grpc.client';
 import {
   ModelInfo,
   QueuePredictionRequest,
@@ -10,7 +11,9 @@ import {
 } from './interfaces/prediction-result.interface';
 
 /**
- * Thin HTTP client for the AI / prediction service (fila-viva-ai).
+ * Client for the AI / prediction service (fila-viva-ai). The batch call
+ * goes over REST (default) or gRPC (PREDICTION_TRANSPORT=grpc); model info
+ * and retraining always use REST.
  *
  * It is intentionally allowed to fail without breaking anything: if the
  * prediction service is unreachable or slow, predictQueue() answers with
@@ -26,6 +29,7 @@ export class PredictionService {
 
   constructor(
     private readonly httpService: HttpService,
+    private readonly grpcClient: PredictionGrpcClient,
     private readonly configService: ConfigService,
   ) {
     this.baseUrl = this.configService
@@ -41,6 +45,9 @@ export class PredictionService {
     request: QueuePredictionRequest,
   ): Promise<QueuePredictionResponse> {
     try {
+      if (this.grpcClient.enabled) {
+        return await this.grpcClient.predictQueue(request, this.timeoutMs);
+      }
       const { data } = await firstValueFrom(
         this.httpService.post<QueuePredictionResponse>(
           `${this.baseUrl}/predict/queue`,

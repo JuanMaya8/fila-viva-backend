@@ -46,6 +46,9 @@ export default () => ({
   internalApiKey: process.env.INTERNAL_API_KEY || '',
   predictionService: {
     baseUrl: process.env.PREDICTION_SERVICE_URL || 'http://localhost:8000',
+    // 'http' (default) or 'grpc' for the batch /predict/queue call.
+    transport: (process.env.PREDICTION_TRANSPORT || 'http').toLowerCase(),
+    grpcUrl: process.env.PREDICTION_GRPC_URL || 'localhost:50051',
     timeoutMs: toInt(process.env.PREDICTION_TIMEOUT_MS, 4000),
   },
   queue: {
