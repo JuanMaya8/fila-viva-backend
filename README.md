@@ -1,14 +1,18 @@
 # Fila Viva — Backend
 
+![NestJS 10](https://img.shields.io/badge/NestJS_10-E0234E?logo=nestjs&logoColor=white) ![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?logo=typescript&logoColor=white) ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-4169E1?logo=postgresql&logoColor=white) ![Redis](https://img.shields.io/badge/Redis-DC382D?logo=redis&logoColor=white) ![Socket.io](https://img.shields.io/badge/Socket.io-010101?logo=socketdotio&logoColor=white) ![gRPC](https://img.shields.io/badge/gRPC-244C5A?logo=google&logoColor=white)
+
 API central de **Fila Viva** para una sucursal bancaria ficticia (Banco Demo). Autentica al personal, gestiona turnos, asesores y trámites, le pide a la IA cuánto va a esperar cada persona y empuja ese dato en vivo a cada pantalla. Este repositorio es **uno de tres**:
 
 | Repositorio | Qué hace | Puerto |
 |---|---|---|
-| `fila-viva-backend` (este) | API central, orquestación y tiempo real | 3000 |
-| `fila-viva-frontend` | Web/PWA del cliente, panel del asesor, panel del admin y pantalla de sala | 3001 |
-| `fila-viva-ai` | Modelos de ML + simulación de la cola | 8000 · gRPC 50051 |
+| [`fila-viva-backend`](https://github.com/JuanMaya8/fila-viva-backend) (este) | API central, orquestación y tiempo real | 3000 |
+| [`fila-viva-frontend`](https://github.com/JuanMaya8/fila-viva-frontend) | Web/PWA del cliente, panel del asesor, panel del admin y pantalla de sala | 3001 |
+| [`fila-viva-ai`](https://github.com/JuanMaya8/fila-viva-ai) | Modelos de ML + simulación de la cola | 8000 · gRPC 50051 |
 
-El orden de arranque, el script `start-all.ps1` y el guion de demo están en `README-GENERAL.md`, en la carpeta que contiene los tres repositorios.
+**Demo en vivo:** [fila-viva-frontend.vercel.app](https://fila-viva-frontend.vercel.app) · API: [fila-viva-backend.onrender.com](https://fila-viva-backend.onrender.com/health) · IA: [fila-viva-ai.onrender.com](https://fila-viva-ai.onrender.com/health)
+
+> Los servicios de Render usan el plan gratuito: si llevan un rato sin uso, la primera petición puede tardar cerca de un minuto mientras arrancan.
 
 ---
 
@@ -196,9 +200,12 @@ Remove-Item Env:DATABASE_URL, Env:INTERNAL_API_KEY
 
 Otras opciones: `--days N` (por defecto 30) y `--seed N` (por defecto 7; misma semilla, mismos datos). Después de insertar, reentrena desde **Admin › Tablero › Modelo IA** y recarga el tablero.
 
-## Contratos entre repositorios
+## 9. Contratos entre servicios
 
-> Esta sección es idéntica en los tres README. Todos los campos van en camelCase. Tipos: TypeScript en `fila-viva-backend/src/modules/prediction/interfaces/prediction-result.interface.ts` y `src/modules/queue/interfaces/queue-views.interface.ts`, TypeScript en `fila-viva-frontend/src/lib/types.ts`, y Pydantic en `fila-viva-ai/app/schemas.py`. El contrato gRPC equivalente está en `proto/fila_viva_prediction.proto` (igual en la IA y en el backend). Si cambias un contrato, actualízalo en los tres repositorios.
+Todos los campos van en camelCase. Las definiciones viven en el código: Pydantic en [`fila-viva-ai/app/schemas.py`](https://github.com/JuanMaya8/fila-viva-ai/blob/main/app/schemas.py), TypeScript en [`fila-viva-backend/src/modules/prediction/interfaces/`](https://github.com/JuanMaya8/fila-viva-backend/tree/main/src/modules/prediction/interfaces) y [`fila-viva-frontend/src/lib/types.ts`](https://github.com/JuanMaya8/fila-viva-frontend/blob/main/src/lib/types.ts). El contrato gRPC equivalente está en `proto/fila_viva_prediction.proto` (igual en la IA y en el backend).
+
+<details>
+<summary><strong>Ver los contratos JSON completos</strong></summary>
 
 ### Backend → IA (todas las rutas excepto `/health` llevan el header `X-API-Key: <INTERNAL_API_KEY>`)
 
@@ -399,7 +406,9 @@ Estados del turno: `created → called → in_service → completed`, más `abse
 
 El token de socket se obtiene con `POST /auth/socket-token` (dura 5 minutos), porque la cookie de sesión es httpOnly. Cada `join*` tiene su `leave*`.
 
-## Notas para quien continúe el proyecto (persona o IA)
+</details>
+
+## 10. Convenciones del proyecto
 
 - Código, comentarios y commits en inglés; los README en español.
 - Cada módulo sigue el patrón `entities/`, `dto/`, `*.service.ts`, `*.controller.ts`, `*.module.ts`.
