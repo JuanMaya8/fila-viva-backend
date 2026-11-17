@@ -163,6 +163,39 @@ Todas están documentadas en `.env.example`. Las imprescindibles son `JWT_SECRET
 
 `JWT_SECRET` lo genera Render. El arranque ejecuta `npm run seed:prod` (migraciones e inserción idempotente) y luego la API. **Ojo:** el primer despliegue elimina las tablas de demo creadas con `synchronize` (migración `DropLegacySchema`), que solo contenían datos ficticios.
 
+## 8. Datos de demostración simulados
+
+> **Aviso:** estos datos son **SIMULADOS**. Sirven para que el tablero y el reentrenamiento tengan historial, y deben presentarse como datos simulados, nunca como atenciones reales.
+
+`scripts/seed-demo-history.js` llena la tabla `prediction_logs` con atenciones simuladas. El resultado "real" (espera y duración) sale de un modelo de colas que la IA no conoce; las predicciones sí son reales: cada fila se predice llamando al servicio `fila-viva-ai` (`/predict` y `/predict/remaining`), igual que con un turno real. Todas las filas quedan marcadas con `prediction_source = 'sim:...'`, así se distinguen de los turnos reales y se pueden borrar con `--clear`. El script vive fuera de `src/`, por lo que no entra al build de producción ni al lint.
+
+Variables (no las guardes en el repositorio):
+
+| Variable | Uso |
+|---|---|
+| `DATABASE_URL` | Cadena de conexión de PostgreSQL (en producción, la de Neon). No hace falta con `--dry-run`. |
+| `INTERNAL_API_KEY` | La misma clave de `fila-viva-ai`. |
+| `AI_URL` | Opcional. Por defecto `https://fila-viva-ai.onrender.com` (también se puede pasar `--ai-url`). |
+
+```powershell
+$env:DATABASE_URL = "postgres://..."      # pégala solo en tu terminal
+$env:INTERNAL_API_KEY = "..."
+
+# Probar sin escribir nada: genera, predice y muestra el resumen
+npm run seed:demo-history -- --dry-run
+
+# Insertar 600 atenciones simuladas repartidas en los últimos 30 días
+npm run seed:demo-history -- --rows 600
+
+# Borrar todas las filas simuladas (solo las sim:...)
+npm run seed:demo-history -- --clear
+
+# Al terminar, limpia las variables de la sesión
+Remove-Item Env:DATABASE_URL, Env:INTERNAL_API_KEY
+```
+
+Otras opciones: `--days N` (por defecto 30) y `--seed N` (por defecto 7; misma semilla, mismos datos). Después de insertar, reentrena desde **Admin › Tablero › Modelo IA** y recarga el tablero.
+
 ## Contratos entre repositorios
 
 > Esta sección es idéntica en los tres README. Todos los campos van en camelCase. Tipos: TypeScript en `fila-viva-backend/src/modules/prediction/interfaces/prediction-result.interface.ts` y `src/modules/queue/interfaces/queue-views.interface.ts`, TypeScript en `fila-viva-frontend/src/lib/types.ts`, y Pydantic en `fila-viva-ai/app/schemas.py`. El contrato gRPC equivalente está en `proto/fila_viva_prediction.proto` (igual en la IA y en el backend). Si cambias un contrato, actualízalo en los tres repositorios.

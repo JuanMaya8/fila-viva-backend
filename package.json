@@ -16,6 +16,7 @@
     "migration:revert": "typeorm-ts-node-commonjs migration:revert -d src/database/data-source.ts",
     "seed": "ts-node src/database/seeds/seed.ts",
     "seed:prod": "node dist/database/seeds/seed.js",
+    "seed:demo-history": "node scripts/seed-demo-history.js",
     "test": "jest",
     "test:watch": "jest --watch",
     "test:cov": "jest --coverage",
